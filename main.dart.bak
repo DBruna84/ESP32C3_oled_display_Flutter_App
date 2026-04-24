@@ -1,0 +1,444 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+void main() {
+  runApp(const FloatingNametagApp());
+}
+
+class FloatingNametagApp extends StatelessWidget {
+  const FloatingNametagApp({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Floating Nametag',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        useMaterial3: true,
+      ),
+      home: const NametagScreen(),
+    );
+  }
+}
+
+class NametagScreen extends StatefulWidget {
+  const NametagScreen({Key? key}) : super(key: key);
+
+  @override
+  State<NametagScreen> createState() => _NametagScreenState();
+}
+
+class _NametagScreenState extends State<NametagScreen> {
+  final TextEditingController _customNameController = TextEditingController();
+  
+  BluetoothDevice? _connectedDevice;
+  BluetoothCharacteristic? _writeCharacteristic;
+  String? _selectedName;
+  bool _isScanning = false;
+
+  final List<String> _nameList = [
+    'Alice',
+    'Bob',
+    'Charlie',
+    'Diana',
+    'Evan',
+    'Fiona',
+    'George',
+    'Hannah',
+    'Ivan',
+    'Julia',
+  ];
+
+  // Nordic UART Service UUIDs
+  static const String serviceUuid = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
+  static const String rxCharUuid = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E';
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBluetoothSupport();
+  }
+
+  Future<void> _checkBluetoothSupport() async {
+    if (!await FlutterBluePlus.isSupported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bluetooth not supported on this device')),
+      );
+    }
+  }
+
+  Future<void> _scanAndConnect() async {
+    try {
+      setState(() {
+        _isScanning = true;
+      });
+
+      // Start scanning
+      FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 10),
+      );
+
+      // Listen for scan results
+      var subscription = FlutterBluePlus.onScanResults.listen(
+        (results) {
+          for (ScanResult result in results) {
+            if (result.device.name == 'FloatingNametag') {
+              FlutterBluePlus.stopScan();
+              _connectToDevice(result.device);
+              subscription.cancel();
+              return;
+            }
+          }
+        },
+        onError: (e) {
+          setState(() {
+            _isScanning = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Scan error: $e')),
+          );
+        },
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Scanning for FloatingNametag...')),
+      );
+    } catch (e) {
+      setState(() {
+        _isScanning = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
+  }
+
+  Future<void> _connectToDevice(BluetoothDevice device) async {
+    try {
+      await device.connect();
+      setState(() {
+        _connectedDevice = device;
+        _isScanning = false;
+      });
+
+      // Discover services
+      List<BluetoothService> services = await device.discoverServices();
+      
+      for (BluetoothService service in services) {
+        if (service.uuid.toString().toUpperCase() == serviceUuid.toUpperCase()) {
+          for (BluetoothCharacteristic char in service.characteristics) {
+            if (char.uuid.toString().toUpperCase() == rxCharUuid.toUpperCase()) {
+              setState(() {
+                _writeCharacteristic = char;
+              });
+              
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Connected to FloatingNametag!')),
+              );
+              return;
+            }
+          }
+        }
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Service not found on device')),
+      );
+    } catch (e) {
+      setState(() {
+        _isScanning = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Connection error: $e')),
+      );
+    }
+  }
+
+  Future<void> _sendName(String name) async {
+    if (_writeCharacteristic == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Not connected to device')),
+      );
+      return;
+    }
+
+    try {
+      await _writeCharacteristic!.write(name.codeUnits);
+      setState(() {
+        _selectedName = name;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sent: $name')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sending: $e')),
+      );
+    }
+  }
+
+  Future<void> _disconnect() async {
+    try {
+      if (_connectedDevice != null) {
+        await _connectedDevice!.disconnect();
+      }
+      setState(() {
+        _connectedDevice = null;
+        _writeCharacteristic = null;
+        _selectedName = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Disconnected')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Disconnect error: $e')),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _customNameController.dispose();
+    _disconnect();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    bool isConnected = _connectedDevice != null;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Floating Nametag'),
+        elevation: 0,
+      ),
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Connection Status
+              Card(
+                color: isConnected
+                    ? Colors.green.shade50
+                    : Colors.red.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isConnected
+                            ? Icons.bluetooth_connected
+                            : Icons.bluetooth_disabled,
+                        color: isConnected
+                            ? Colors.green
+                            : Colors.red,
+                      ),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isConnected
+                                ? 'Connected'
+                                : 'Not Connected',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: isConnected
+                                  ? Colors.green
+                                  : Colors.red,
+                            ),
+                          ),
+                          Text(
+                            isConnected
+                                ? _connectedDevice?.name ?? 'Device'
+                                : 'No device',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      if (isConnected)
+                        TextButton(
+                          onPressed: _disconnect,
+                          child: const Text('Disconnect'),
+                        )
+                      else
+                        ElevatedButton.icon(
+                          onPressed: _isScanning ? null : _scanAndConnect,
+                          icon: _isScanning
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.bluetooth_searching),
+                          label: Text(_isScanning ? 'Scanning...' : 'Connect'),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Current Name Display
+              if (_selectedName != null)
+                Card(
+                  color: Colors.blue.shade50,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Current Name on Badge:',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _selectedName!,
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 24),
+
+              // Select from List
+              const Text(
+                'Select a Name',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 1.2,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                ),
+                itemCount: _nameList.length,
+                itemBuilder: (context, index) {
+                  return ElevatedButton(
+                    onPressed: isConnected
+                        ? () => _sendName(_nameList[index])
+                        : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      disabledBackgroundColor: Colors.grey.shade300,
+                    ),
+                    child: Text(
+                      _nameList[index],
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+
+              // Custom Name Input
+              const Text(
+                'Or Enter Custom Name',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _customNameController,
+                maxLength: 15,
+                decoration: InputDecoration(
+                  hintText: 'Enter your name',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  suffixIcon: const Icon(Icons.person),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: isConnected &&
+                          _customNameController.text.isNotEmpty
+                      ? () => _sendName(_customNameController.text)
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    disabledBackgroundColor: Colors.grey.shade300,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: const Text(
+                    'Send Custom Name',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Info Section
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'How to use:',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      '1. Click "Connect" to find your Floating Nametag\n'
+                      '2. Select a name from the grid or enter a custom name\n'
+                      '3. Your name will appear on the badge display\n'
+                      '4. Click "Disconnect" when done',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
